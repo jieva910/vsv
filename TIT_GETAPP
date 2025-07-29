@@ -1,0 +1,237 @@
+USE [SAPB1_AS_TST]
+GO
+
+/****** Object: SqlProcedure [dbo].[TIT_GETAPP] Script Date: 2025/7/29 15:13:02 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+CREATE PROCEDURE [dbo].[TIT_GETAPP]
+	 @ToPostDate Date,
+	 @ToDueDate Date,
+	 @GroupCode NVARCHAR(15),  --供应商组
+	 @GroupNum NVARCHAR(15),   --付款条款
+	 @PayMethCod NVARCHAR(15), --付款方式
+	 @FAcctCode NVARCHAR(15),
+	 @TAcctCode NVARCHAR(15),
+	 @FCardCode  NVARCHAR(15),
+	 @TCardCode  NVARCHAR(15),
+	 @Currency  NVARCHAR(15),
+	 @IsPre  NVARCHAR(15),
+	 @Arr4  NVARCHAR(15)
+AS
+BEGIN
+
+--说明：
+--1、到期余额列，为待付款金额
+--2、过期天数：以报表运行日期和到期日进行比较
+--3、对于AP Reserve Invoice中的应付金额提取，只抓取那些完成全部收货的
+--4、若不选择具体控制科目，则报表结果呈现全部控制科目未清余额
+-- set @IsPre= 'N'  
+if @IsPre<>'Y'
+begin
+	SELECT T4.CardCode 
+      ,T4.CardName 
+      ,T9.GroupCode 
+      ,T9.GroupName 
+      ,T8.GroupNum 
+      ,T8.PymntGroup 
+      ,T1.TransType 
+      ,CASE WHEN T1.TransType = 30 THEN 'JE'
+            WHEN T1.TransType = 18 THEN 'PU'
+            WHEN T1.TransType = 46 THEN 'PA'
+            WHEN T1.TransType = 19 THEN 'PC'
+            ELSE 'not found' END 'DocumentType'
+     ,CASE WHEN T1.TransType = 30 THEN T1.Line_id
+            WHEN T1.TransType = 18 THEN '0'
+            WHEN T1.TransType = 46 THEN '0'
+            WHEN T1.TransType = 19 THEN '0'
+            ELSE 'not found' END 'LineId'
+	  ,T2.BaseRef DocNum
+	  ,T7.NumAtCard 
+	  ,CASE WHEN T1.TransType = 30 THEN T1.LineMemo 
+	        WHEN T1.TransType = 18 THEN T7.Comments
+	        WHEN T1.TransType = 46 THEN  ( case when t72.PayNoDoc = 'Y' then  'PaymentWithAccount'+T72.Comments else T72.Comments+t72.JrnlMemo  End ) 
+	        WHEN T1.TransType = 19 THEN T71.Comments
+	        ELSE T7.Comments END Comments
+	  ,CASE WHEN T1.TransType = 30 THEN T1.transid 
+	        WHEN T1.TransType = 18 THEN T7.Docentry
+	        WHEN T1.TransType = 46 THEN  ( case when t72.PayNoDoc = 'Y' then  T1.transid else T72.Docentry End )
+	        WHEN T1.TransType = 19 THEN T71.Docentry
+	        ELSE T7.Docentry END Docentry
+	  ,CASE WHEN T1.TransType = 30 THEN T1.transid 
+	        WHEN T1.TransType = 18 THEN T7.DocNum
+	        WHEN T1.TransType = 46 THEN  ( case when t72.PayNoDoc = 'Y' then  T1.transid else T72.DocNum End )
+	        WHEN T1.TransType = 19 THEN T71.DocNum
+	        ELSE T7.DocNum END DocNum
+      ,T1.Account 
+      ,T3.AcctName 
+      ,T1.FCCurrency 
+      ,CASE WHEN t7.ImportEnt<>0  AND dp1.U_VES_Status ='A' THEN dp1.DocTotal
+   WHEN isnull(pc21.DocEntry,'')<>'' AND dp0.U_VES_Status ='A' THEN dp0.DocTotal else T1.Credit - T1.Debit end   'Total(LC)'--DocTotal LC
+      , T1.FCCredit - T1.FCDebit 'Total(FC)'--DocTotal FC
+      ,case when  isnull(T1.FCCurrency,'')<>'' then T1.FCCurrency else 'RMB' end  'Currency'
+      ,case when  isnull(T1.FCCurrency,'')<>'' then T1.BalFcCred  - T1.BalFcDeb else  CASE WHEN t7.ImportEnt<>0  AND dp1.U_VES_Status ='A' THEN dp1.DocTotal
+   WHEN isnull(pc21.DocEntry,'')<>'' AND dp0.U_VES_Status ='A' THEN dp0.DocTotal else T1.BalDueCred - T1.BalDueDeb END  end 'Total'
+      --,T1.RefDate 
+      --,T1.DueDate 
+      ,DATEDIFF (DD ,T1.DueDate ,GETDATE()) 'OverdueDays'
+      ,  T1.BalDueCred - T1.BalDueDeb   'BalanceDue(LC)'--Balance LC
+      ,T1.BalFcCred  - T1.BalFcDeb  'BalanceDue(FC)'--Balance FC
+      --,T1.TransType 
+      ,T4.PymCode 
+      ,iif(t7.ImportEnt <> 0 and t7.DocTotal*0.25 >= t7.DocTotal -t7.PaidSum,'S-T/T',T7.PeyMethod) PayMethCod
+	  -- 10% wei kuan should be in use of TT
+      ,T5.Descript 
+      ,T4.dflaccount 
+      ,T2.RefDate
+      ,T2.DueDate
+      --,T5.DflAccount 总账银行科目
+      --,T6.AcctName 总账银行科目名称
+      --,T6.CurrTotal 最大支出金额
+      --,T7.PayBlock 
+	  --,T7.isIns
+	  ,case when T4.QryGroup1 = 'Y' and  T4.QryGroup4 <> 'Y' THEN 'Direct Customer/Supplier' 			
+     when T4.QryGroup2 = 'Y' and  T4.QryGroup4 <> 'Y' THEN 'InterCo Customer/Supplier'			
+     when T4.QryGroup3 = 'Y' THEN 'Consignment' 			
+     when T4.QryGroup4 = 'Y' THEN 'Employee' 			
+     else '' end  'Property'
+     
+FROM JDT1 T1 WITH(NOLOCK) LEFT JOIN OJDT T2 WITH(NOLOCK) ON T1.TransId = T2.TransId 
+			 LEFT JOIN OACT T3 WITH(NOLOCK) ON T3.AcctCode = T1.Account 
+			 LEFT JOIN OCRD T4 WITH(NOLOCK) ON T4.CardCode = T1.ShortName and (( t4.validFor = 'Y' or t4.validFor = 'N') and t4.frozenFor = 'N')
+			                                  and ( t4.validTo >  convert(varchar(10),getdate(),120) or t4.validTo is null )
+			 LEFT JOIN OPYM T5 WITH(NOLOCK) ON T5.PayMethCod = T4.PymCode --付款方式
+			 LEFT JOIN OACT T6 WITH(NOLOCK) ON T6.AcctCode = T5.DflAccount 
+			 LEFT JOIN OPCH T7 WITH(NOLOCK) ON T7.DocNum = T2.BaseRef AND T2.TransType = 18 and t7.payblock = 'N' 
+			 LEFT JOIN ORPC T71 WITH(NOLOCK) ON T71.DocNum = T2.BaseRef AND T2.TransType = 19
+			 LEFT JOIN OVPM T72 WITH(NOLOCK) ON T72.DocNum = T2.BaseRef AND T2.TransType = 46
+			 LEFT JOIN OCTG T8 WITH(NOLOCK) ON T8.GroupNum = T7.GroupNum --付款条款
+			 LEFT JOIN OCRG T9 WITH(NOLOCK) ON T9.GroupCode = T4.GroupCode --供应商组
+			   LEFT JOIN PCH21 pc21 ON t7.DocEntry = pc21.DocEntry
+ LEFT JOIN ODPO dp0 ON pc21.RefDocEntr =dp0.DocEntry AND pc21.RefObjType =dp0.ObjType 
+  LEFT JOIN ODPO dp1 ON t7.ImportEnt =dp1.DocNum  
+WHERE T3.LocManTran = 'Y' --Extract Control Account
+      AND (T1.BalDueDeb <> 0 OR T1.BalDueCred <> 0 OR T1.BalFcCred <> 0 OR T1.BalFcDeb <> 0) -- extract open balance only
+      AND ISNULL(T7.PayBlock,'N') <> 'Y' --extract non-payment-block on AP Inv
+      AND ISNULL(T1.PayBlock,'N') <> 'Y'
+      AND (T1.RefDate <= @ToPostDate OR @ToPostDate = '')
+      AND (T1.DueDate <= @ToDueDate OR @ToDueDate = '') 
+    ---  AND (T1.RefDate <= '2016-03-14' OR @ToPostDate = '')
+     -- AND (T1.DueDate <= '2016-03-18' OR @ToDueDate = '')
+      
+      AND (T9.GroupCode in (select short_str from dbo.TIT_SPLIT(@GroupCode,',') )  OR @GroupCode = '')
+      AND (T8.GroupNum in (select short_str from dbo.TIT_SPLIT(@GroupNum,',') )  OR @GroupNum = '')
+      AND (T5.PayMethCod = @PayMethCod OR @PayMethCod = '')
+      AND (T1.Account >= @FAcctCode OR @FAcctCode = '')
+      AND (T1.Account <= @TAcctCode OR @TAcctCode = '')
+      AND (T4.CardCode >= @FCardCode OR @FCardCode = '')
+      AND (T4.CardCode <= @TCardCode OR @TCardCode = '')
+     --  AND (T4.CardCode >= '10000536' OR @FCardCode = '10000536')
+     -- AND (T4.CardCode <= '10000536' OR @TCardCode = '10000536')
+      
+      AND (T4.Currency = @Currency OR @Currency = '')
+      AND (ISNULL(T7.isIns,'N') = 'N' OR (T7.isIns = 'Y' AND T7.InvntSttus = 'C'))--Extract AP Invoice or AP Reserve Invoice within all goods delivery
+      AND  T1.TransType in (18,30,46,19)
+      AND (T4.QryGroup4 = @Arr4 OR isnull(@Arr4,'') = '')
+        -- AND (T4.QryGroup4 = 'Y' OR isnull(@Arr4,'') = '')
+         
+      AND T1.Account in (select U_AcctCode from  [@TIT_ACCOUNT])
+      
+       and Not exists ( select 'X' from [@TIT_APP1] t10 WITH(NOLOCK), [@TIT_APP2] t11 WITH(NOLOCK) where t10.DocEntry = t11.DocEntry 
+           and t10.U_Cardcode = t4.CardCode and t10.U_Cardcode = t11.U_Cardcode and t11.U_SAPnum = t7.DocNum and ( t10.U_Docstatus in ('未清','锁定','AUT' ) and ( t10.U_IsPayment = 'N' )  )   )
+       
+ORDER BY T1.ShortName,T2.BaseRef
+
+FOR BROWSE
+
+end
+
+--预付款
+if @IsPre='Y'
+begin
+	SELECT T4.CardCode 
+      ,T4.CardName 
+      ,T9.GroupCode 
+      ,T9.GroupName 
+      ,T8.GroupNum 
+      ,T8.PymntGroup 
+      ,T1.objType  'TransType'
+      ,'DT' 'DocumentType'
+      ,'0' 'LineId'
+	  ,T1.DocNum 
+	  ,T1.NumAtCard 
+	  ,T1.Comments
+	  ,T1.Docentry
+	  ,T1.DocNum
+      ,t10.AcctCode Account --,'' Account 
+      ,t3.AcctName AcctName --'' AcctName 
+      ,T1.DocCur 'FCCurrency'
+      ,T1.doctotal 'Total(LC)'--DocTotal LC
+      ,doctotalFC 'Total(FC)'--DocTotal FC
+      ,T1.DocCur  'Currency'
+      ,case when  T1.doctotal - T1.PaidSum>0 then T1.doctotal - T1.PaidSum else T1.doctotalFC  - T1.PaidSumFC   end 'Total'
+      ,T1.DocDate 
+      ,T1.DocDueDate 
+      --,DATEDIFF (DD ,T1.DueDate ,GETDATE()) 'OverdueDays'
+      ,T1.doctotal - T1.PaidSum 'BalanceDue(LC)'--Balance LC
+      ,T1.doctotalFC  - T1.PaidSumFC  'BalanceDue(FC)'--Balance FC
+      --,T1.TransType 
+      ,T4.PymCode 
+      ,T5.PayMethCod
+      ,T5.Descript 
+      ,T4.dflaccount 
+          ,T1.DocDate 'RefDate'
+      ,T1.DocDueDate 'DueDate'
+      --,T5.DflAccount 总账银行科目
+      --,T6.AcctName 总账银行科目名称
+      --,T6.CurrTotal 最大支出金额
+      --,T7.PayBlock 
+	  --,T7.isIns
+	    ,case when T4.QryGroup1 = 'Y' and  T4.QryGroup4 <> 'Y' THEN 'Direct Customer/Supplier' 			
+     when T4.QryGroup2 = 'Y' and  T4.QryGroup4 <> 'Y' THEN 'InterCo Customer/Supplier'			
+     when T4.QryGroup3 = 'Y' THEN 'Consignment'
+     when T4.QryGroup4 = 'Y' THEN 'Employee'
+     else '' end  'Property'
+FROM odpo T1 WITH(NOLOCK) 
+			 LEFT JOIN OCRD T4 WITH(NOLOCK) ON T4.CardCode = T1.CardCode and (( t4.validFor = 'Y' or t4.validFor = 'N') and t4.frozenFor = 'N')
+			                                  and ( t4.validTo >  convert(varchar(10),getdate(),120) or t4.validTo is null )
+			 LEFT JOIN OPYM T5 WITH(NOLOCK) ON T5.PayMethCod = T4.PymCode --付款方式
+			 LEFT JOIN OCTG T8 WITH(NOLOCK) ON T8.GroupNum = T1.GroupNum --付款条款
+			 LEFT JOIN OCRG T9 WITH(NOLOCK) ON T9.GroupCode = T4.GroupCode --供应商组
+             left join CRD3 t10 with(nolock) on t10.AcctType = 'D' and t10.CardCode = t1.CardCode 
+			 LEFT JOIN OACT T3 WITH(NOLOCK) ON T3.AcctCode = T10.AcctCode 
+			 
+WHERE  (T1.doctotal - T1.PaidSum > 0 OR T1.doctotalFC  - T1.PaidSumFC > 0) -- extract open balance only
+      AND ISNULL(T1.PayBlock,'N') <> 'Y' --extract non-payment-block on AP Inv
+
+      AND (T1.DocDate <= @ToPostDate OR @ToPostDate = '')
+      AND (T1.docDueDate <= @ToDueDate OR @ToDueDate = '')
+      AND (T9.GroupCode in (select short_str from dbo.TIT_SPLIT(@GroupCode,',') )  OR @GroupCode = '')
+      AND (T8.GroupNum in (select short_str from dbo.TIT_SPLIT(@GroupNum,',') )  OR @GroupNum = '')
+      AND (T5.PayMethCod = @PayMethCod OR @PayMethCod = '')
+      --AND (T1.Account >= @FAcctCode OR @FAcctCode = '')
+      --AND (T1.Account <= @TAcctCode OR @TAcctCode = '')
+      AND (T4.CardCode >= @FCardCode OR @FCardCode = '')
+      AND (T4.CardCode <= @TCardCode OR @TCardCode = '')
+      AND (T4.Currency = @Currency OR @Currency = '') 
+      AND  T1.objtype in (204)
+        and (t1.Canceled='N' and t1.docstatus='O')
+      AND (T4.QryGroup4 = @Arr4 OR isnull(@Arr4,'') = '')
+      AND t10.AcctCode in (select U_AcctCode from  [@TIT_ACCOUNT])
+	  and t1.u_ves_status in ('C')
+  --     and Not exists ( select 'X' from [@TIT_APP1] t12 WITH(NOLOCK), [@TIT_APP2] t11 WITH(NOLOCK) where t12.DocEntry = t11.DocEntry 
+   --        and t12.U_Cardcode = t4.CardCode and t12.U_Cardcode = t11.U_Cardcode and t11.U_SAPnum = t1.DocNum and ( t12.U_Docstatus in ('未清','锁定','AUT' ) and ( t12.U_IsPayment = 'N' )  )   )
+  
+ORDER BY T1.CardCode,T1.docentry
+FOR BROWSE
+
+end
+
+END
+
+--exec [TIT_GETAPP] '','','','','','','','300033V','300033V','','N',''
+--EXEC dbo.TIT_GETAPP  '','','','','','','','300486V','300486V','','Y','N'
