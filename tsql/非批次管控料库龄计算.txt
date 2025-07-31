@@ -1,0 +1,126 @@
+
+
+WITH 
+-- 步骤1: 提取所有入库交易（正数量）
+IncomingStock AS (
+    SELECT 
+        T0.ItemCode,
+        T0.LocCode,
+        T0.DocDate AS StockDate,
+        T0.InQty AS Quantity,
+        T0.TransType,
+        T0.Base_Ref
+    FROM 
+        OIVL T0
+    INNER JOIN 
+        OITM T1 ON T0.ItemCode = T1.ItemCode 
+        AND (
+            (T1.U_Ves_MfgLine = 'cse' AND T1.U_Ves_FinPLN = '999') 
+            OR (T1.U_Ves_MfgLine = 'CSV' AND T1.U_Ves_FinPLN = '350')
+        )
+    WHERE 
+        T1.ManBtchNum = 'N' 
+        AND T0.InQty > 0  -- 仅入库
+),
+-- 步骤2: 计算每个物料/仓库的总出库量
+TotalOutgoing AS (
+    SELECT 
+        ItemCode,
+        LocCode,
+        SUM(OutQty) AS TotalOutQty
+    FROM 
+        OIVL
+    GROUP BY 
+        ItemCode, LocCode
+),
+-- 步骤3: 为入库交易添加累计入库和行号
+IncomingWithCumulative AS (
+    SELECT 
+        *,
+        SUM(Quantity) OVER (
+            PARTITION BY ItemCode, LocCode 
+            ORDER BY StockDate, Base_Ref
+        ) AS CumulativeInQty,
+        ROW_NUMBER() OVER (
+            PARTITION BY ItemCode, LocCode 
+            ORDER BY StockDate, Base_Ref
+        ) AS RowNum
+    FROM 
+        IncomingStock
+),
+-- 步骤4: 找到FIFO临界点（首个累计入库>总出库的交易）
+FIFOCriticalPoint AS (
+    SELECT 
+        I.ItemCode,
+        I.LocCode,
+        MIN(I.RowNum) AS CriticalRowNum,
+        MAX(O.TotalOutQty) AS TotalOutQty,
+        MAX(I.CumulativeInQty) AS CumulativeInBefore
+    FROM 
+        IncomingWithCumulative I
+    INNER JOIN 
+        TotalOutgoing O ON I.ItemCode = O.ItemCode AND I.LocCode = O.LocCode
+    WHERE 
+        I.CumulativeInQty > O.TotalOutQty
+    GROUP BY 
+        I.ItemCode, I.LocCode
+),
+-- 步骤5: 计算剩余库存及其库龄
+RemainingStock AS (
+    SELECT 
+        I.ItemCode,
+        I.LocCode,
+        I.StockDate,
+        -- 计算剩余数量
+        CASE 
+            WHEN F.CriticalRowNum IS NULL THEN 0  -- 无剩余
+            WHEN I.RowNum > F.CriticalRowNum THEN I.Quantity  -- 临界点后全保留
+            WHEN I.RowNum = F.CriticalRowNum 
+                THEN I.CumulativeInQty - F.TotalOutQty  -- 临界点部分保留
+            ELSE 0
+        END AS RemainingQty,
+        DATEDIFF(DAY, I.StockDate, '2025-07-30') AS AgingDays  -- 库龄天数
+    FROM 
+        IncomingWithCumulative I
+    LEFT JOIN 
+        FIFOCriticalPoint F 
+        ON I.ItemCode = F.ItemCode AND I.LocCode = F.LocCode
+),
+-- 步骤6: 按库龄区间分组汇总
+FinalAging AS (
+    SELECT 
+        ItemCode,
+        LocCode,
+        SUM(CASE WHEN AgingDays BETWEEN 0 AND 30 THEN RemainingQty ELSE 0 END) AS "0-30天",
+        SUM(CASE WHEN AgingDays BETWEEN 31 AND 60 THEN RemainingQty ELSE 0 END) AS "30-60天",
+        SUM(CASE WHEN AgingDays BETWEEN 61 AND 120 THEN RemainingQty ELSE 0 END) AS "60-120天",
+        SUM(CASE WHEN AgingDays BETWEEN 121 AND 280 THEN RemainingQty ELSE 0 END) AS "120-280天",
+        SUM(CASE WHEN AgingDays BETWEEN 281 AND 360 THEN RemainingQty ELSE 0 END) AS "280-360天",
+        SUM(CASE WHEN AgingDays > 360 THEN RemainingQty ELSE 0 END) AS "360天以上"
+    FROM 
+        RemainingStock
+    WHERE 
+        RemainingQty > 0  -- 只统计有库存的
+    GROUP BY 
+        ItemCode, LocCode
+)
+-- 最终输出（添加物料名称）
+SELECT 
+    F.ItemCode AS '物料代码',
+    T.ItemName AS '物料名称',
+    F.LocCode AS '仓库',
+    F."0-30天",
+    F."30-60天",
+    F."60-120天",
+    F."120-280天",
+    F."280-360天",
+    F."360天以上"
+FROM 
+    FinalAging F
+INNER JOIN 
+    OITM T ON F.ItemCode = T.ItemCode
+ORDER BY 
+    F.ItemCode, F.LocCode;
+
+
+;

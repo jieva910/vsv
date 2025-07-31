@@ -1,0 +1,278 @@
+
+DECLARE  @RunDate1 AS DATETIME;
+DECLARE  @RunDate2 AS DATETIME;
+DECLARE  @CardCode AS nvarchar(100);
+
+/*SELECT * FROM OINV T0 WHERE T0.DocDate = [%1] */
+SET @RunDate1 = '20240101';
+/*SELECT * FROM OINV T0 WHERE T0.DocDate = [%2] */
+SET @RunDate2 = '20250630';
+/*SELECT * FROM OCRD T0 WHERE T0.CardCode = [%3] */
+SET @CardCode = '';
+WITH A0 AS (
+
+   SELECT T0.* FROM ( SELECT T1.CardCode,T1.DocDate,T1.DocEntry,T1.DocNum ,T2.LineNum,T2.ItemCode ,T5.DistNumber
+							,T5.InDate AS 'BatchDate'   ---batch number Master data
+							,ROW_NUMBER ()OVER (PARTITION BY T1.DocNum,T2.LineNum ORDER BY T5.InDate desc ,T5.DistNumber desc) AS 'RowNum'
+					  FROM OINV T1  INNER JOIN INV1 T2 WITH(NOLOCK) ON T1.docentry = T2.docentry 
+									INNER JOIN OITL T3 WITH(NOLOCK) ON T1.DocNum = T3.DocNum AND T2.LineNum = T3.DocLine 
+									INNER JOIN ITL1 T4 WITH(NOLOCK) ON T3.LogEntry = T4.LogEntry AND T3.ItemCode =T4.ItemCode
+									INNER JOIN OBTN T5 WITH(NOLOCK) ON T4.ItemCode = T5.ItemCode AND T4.SysNumber = T5.SysNumber AND T4.MdAbsEntry = T5.AbsEntry
+     				  WHERE T2.WhsCode IN ('CC','CT') ) AS T0  WHERE T0.RowNum = '1' 
+           ),
+
+     A1 AS ( SELECT T1.CardCode AS 'BCardCode'  ,T1.DocDate AS 'BDocDate' ,T1.DocEntry AS 'BDocEntry' ,T1.DocNum AS 'BDocNum' ,T1.DocLine AS 'BDocLine'
+				   ,T2.ItemCode AS 'BItemCode' ,T3.DistNumber AS 'BDistNumber' ,T3.InDate AS 'BBatchDate'---Batch detail
+			  FROM OITL T1 INNER JOIN ITL1 T2 ON T1.LogEntry = T2.LogEntry
+						   INNER JOIN OBTN T3 ON T2.ItemCode = T3.ItemCode AND T2.SysNumber = T3.SysNumber AND T2.MdAbsEntry = T3.AbsEntry
+              WHERE T1.doctype ='15' AND T1.cardcode like 'C.%' AND T2.Quantity <> 0
+          	),
+        	
+     A2 AS ( SELECT A0.CardCode,A0.DocDate,A0.DocEntry,A0.DocNum,A0.LineNum,A0.ItemCode,A0.DistNumber,A0.BatchDate                   ,A1.BCardCode,A1.BDocDate,A1.BDocNum
+		           ,ROW_NUMBER () OVER ( PARTITION BY A0.DocNum, A0.LineNum ORDER BY A1.BDocDate DESC,A1.BDocNum DESC) AS 'Rankings'
+	          FROM A0 INNER JOIN A1 WITH(NOLOCK) ON A0.ItemCode = A1.BItemCode AND A0.DistNumber = A1.BDistNumber AND A0.CardCode = RIGHT(A1.BCardCode,6)
+	          WHERE A1.BDocDate <= A0.DOCDATE 
+	           ),
+     A3 AS ( SELECT A2.* FROM A2 WITH(NOLOCK) WHERE A2.Rankings = '1'	
+           )
+
+SELECT distinct  '' 'Sales Order Number','' 'Date of Sales Order',  (CASE WHEN t1.DocTotal<>0 THEN 'In' ELSE 'FOC' END)+(CASE WHEN t1.CANCELED<>'N' THEN ' t1.CANCELED' ELSE '' END) InvoiceType
+    ,t1.U_VES_ReASONCode 'ReasonType',t1.NumatCard,t2.U_manufsource'Mfgloc'
+    ,CASE WHEN t2.TargetType='-1' AND LEFT(t1.ReceiptNum,2)='24' THEN 'IncomingPayment'
+          WHEN t2.TargetType='14' THEN 'Creditmemo'
+          WHEN t2.TargetType='13' THEN 'Invoice'
+          WHEN (t2.TargetType='-1' AND t1.DocNum IN (checknum.Docnum)) THEN 'InterRec' ELSE 'Open' END AS 'RecMethod'
+    ,t2.OcrCode
+	,t2.U_finuse
+    ,(SELECT groupname FROM ocrg WHERE groupcode=(SELECT groupcode FROM ocrd WHERE cardcode=t1.cardcode)) CardType
+    ,t1.DocDate, t2.VisOrder,t1.DocNum,t1.docstatus,jt.Number 'JENumber',gti.GtsInvNum , t2.ItemCode,t2.DscriptiON
+    ,t2.ocrcode D1,t2.ocrcode2 D2,t2.ocrcode3 D3,t2.ocrcode4 D4,t2.ocrcode5 D5
+    ,d.Password as 'BPSiteCode',t1.CardCode,t1.CardName
+	,T1.U_DocType,T3.U_NAME,b.U_name AS 'Sales Owner',e.SlpName
+    ,Replace(T1.Comments,CHAR(13) + CHAR(10), '<br>') AS 'Comments'
+    ,t1.u_Ves_serialnum
+	,t2.unitMsr
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.Quantity AS  Quantity
+	,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.Weight1 AS 'Weight'
+    ,t1.doccur,t2.VatPrcnt AS vat
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.vatsum AS RMB_VAT
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.VatSumFrgn AS Frgn_VAT
+    , CAST(CAST(t2.price*t1.docrate AS numeric(18,6)) AS nvarchar(50))  AS selprice
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.price*t2.Quantity AS Value_Currency
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*(CASE WHEN t1.Doccur = 'RMB' THEN t2.LineTotal else t2.TotalFrgn end) AS seltotle
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*(CASE WHEN t1.Doccur = 'RMB' THEN t2.LineTotal+t2.vatsum ELSE t2.TotalFrgn+t2.VatSumFrgn end)  AS Total_ValueInTax
+     ,t1.DocRate AS Cur_Rate
+    ,CASE WHEN t1.doctype='I' THEN (CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.LineTotal
+          ELSE CAST((CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*CAST(t2.LineTotal AS numeric(18,6)) AS nvarchar(50)) END AS TotalVAL_RMB
+    ,CASE WHEN t1.doctype='I' THEN (CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*(t2.LineTotal+t2.vatsum)
+          ELSE CAST((CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*CAST(t2.LineTotal +t2.vatsum  AS numeric(18,6)) AS nvarchar(50)) END  AS Total_ValueInTax_RMB
+    ,t2.u_ves_baseNum PONumber
+    ,k1.Name AS 'Country'
+ ,k2.name  AS 'CountryS'
+    ,n.BDocDate AS 'Deliver date'
+    ,n.BDocNum AS 'Delivery Number'
+	,rc.docdate 'Invoice Paid Date'
+	,t13.descript as Territory
+	,t1.ShipToCode
+	,t12.CountyS as ShipToName
+	,t2.AcctCode
+	,O.AcctName
+	,O.FrgnName
+	,s1.trnspname
+FROM OINV t1 WITH(NOLOCK)   INNER JOIN INV1 t2 WITH(NOLOCK) ON t1.DocEntry =t2.DocEntry 
+						     LEFT JOIN OCRD d  WITH(NOLOCK) ON t1.CardCode=d.CardCode
+						     LEFT JOIN OSLP e  WITH(NOLOCK) ON d.SlpCode=e.SlpCode
+						     LEFT JOIN OUSR T3 WITH(NOLOCK) ON T3.USERID = t1.UserSign
+							 LEFT JOIN OHEM a  WITH(NOLOCK) ON t1.OwnerCode=a.empID
+							 LEFT JOIN OUSR b  WITH(NOLOCK) ON b.USERID = a.userId
+							 LEFT JOIN crd1 k  WITH(NOLOCK) ON d.cardcode = k.cardcode AND k.AdresType = 'B' 
+							 LEFT JOIN OCRY k1 WITH(NOLOCK) ON K.Country = K1.Code
+							 LEFT JOIN OACT O  WITH(NOLOCK) ON t2.acctcode = O.acctcode
+							 LEFT JOIN ( SELECT CASE WHEN b.SrcObjTyp='13' THEN t2.DocNum WHEN b.SrcObjTyp='14' THEN t4.DocNum
+							                         WHEN b.SrcObjTyp='24' THEN t3.DocNum ELSE '10000000' END AS 'Docnum'
+							                         ,a.RecONType,a.CancelAbs,a.RecONNum,IsCard,RecONDate,RecONJEId,b.SrcObjAbs,b.SrcObjtyp
+                                         FROM oitr a WITH(NOLOCK) LEFT JOIN ITR1 b  WITH(NOLOCK) ON a.RecONNum=b.RecONNum
+																  LEFT JOIN OINV T2 WITH(NOLOCK) ON b.SrcObjAbs=T2.DocEntry AND b.SrcObjTyp='13'		
+																  LEFT JOIN ORCT T3 WITH(NOLOCK) ON b.SrcObjAbs=T3.DocEntry AND b.SrcObjTyp='24'		
+																  LEFT JOIN ORIN T4 WITH(NOLOCK) ON b.SrcObjAbs=T4.DocEntry AND b.SrcObjTyp='14'	
+																  LEFT JOIN OVPM t5 WITH(NOLOCK) ON b.SrcObjAbs=T5.DocEntry AND b.SrcObjTyp='46'	
+																  LEFT JOIN OJDT t6 WITH(NOLOCK) ON b.SrcObjAbs=T6.transid AND b.SrcObjTyp='30'		
+										WHERE IsCard='C' AND (b.ShortName not like 'S%' AND b.ShortName not like '%V')AND RecONType<>'4'
+                                        ) checknum ON checknum.Docnum = t1.DocNum
+                              LEFT JOIN A3 AS n WITH(NOLOCK) ON t2.DocEntry = n.DocEntry AND T2.LineNum = n.LineNum
+                              left join INV12 t12 with (nolock) on t12.DocEntry = t1.DocEntry 
+                                LEFT JOIN OCRY k2 WITH(NOLOCK) ON t12.CountryS = K2.Code 
+								left join oshp s1 on t1.trnspcode=s1.trnspcode
+								left join oter t13 on d.Territory=t13.territryID
+								left join OGTI gti on gti.MappingNum =cast(t1.Docnum as nvarchar(20))
+								left join ojdt jt on t1.transid = jt.transid
+								LEFT JOIN rct2 rc2 on rc2.docentry = t1.docentry
+								left join orct rc on rc.docentry = rc2.docnum
+WHERE (t1.DocDate >=@RunDate1 AND t1.DocDate <=@RunDate2 ) and (t1.cardcode=@CardCode or @CardCode='') AND t2.acctcode like '41%'
+AND t2.WhsCode  IN ('CC','CT')
+
+
+UNION All
+
+SELECT distinct r0.docnum 'Sales Order Number',r0.docdate 'Date of Sales Order',  (CASE WHEN t1.DocTotal<>0 THEN 'In' ELSE 'FOC' END)+(CASE WHEN t1.CANCELED<>'N' THEN ' t1.CANCELED' ELSE '' END) InvoiceType
+    ,t1.U_VES_ReASONCode 'ReasonType',t1.NumatCard,t2.U_manufsource'Mfgloc'
+    ,CASE WHEN t2.TargetType='-1' AND LEFT(t1.ReceiptNum,2)='24' THEN 'IncomingPayment'
+          WHEN t2.TargetType='14' THEN 'Creditmemo'
+          WHEN t2.TargetType='13' THEN 'Invoice'
+          WHEN (t2.TargetType='-1' AND t1.DocNum IN (checknum.Docnum)) THEN 'InterRec' ELSE 'Open' END AS 'RecMethod'
+    ,t2.OcrCode
+	,t2.U_finuse
+    ,(SELECT groupname FROM ocrg WHERE groupcode=(SELECT groupcode FROM ocrd WHERE cardcode=t1.cardcode)) CardType
+    ,t1.DocDate, t2.VisOrder,t1.DocNum,t1.docstatus,jt.Number 'JENumber',gti.GtsInvNum,t2.ItemCode,t2.DscriptiON
+    ,t2.ocrcode D1,t2.ocrcode2 D2,t2.ocrcode3 D3,t2.ocrcode4 D4,t2.ocrcode5 D5
+    ,d.Password as 'BPSiteCode',t1.CardCode,t1.CardName
+	,T1.U_DocType,T3.U_NAME,b.U_name AS 'Sales Owner',e.SlpName
+    ,Replace(T1.Comments,CHAR(13) + CHAR(10), '<br>') AS 'Comment'
+    ,t1.u_Ves_serialnum
+	,t2.unitMsr
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.Quantity AS  Quantity
+	,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.Weight1 AS 'Weight'
+    ,t1.doccur,t2.VatPrcnt AS vat
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.vatsum AS RMB_VAT
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.VatSumFrgn AS Frgn_VAT
+    , CAST(CAST(t2.price*t1.docrate AS numeric(18,6)) AS nvarchar(50))  AS selprice
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.price*t2.Quantity AS Value_Currency
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*(CASE WHEN t1.Doccur = 'RMB' THEN t2.LineTotal else t2.TotalFrgn end) AS seltotle
+    ,(CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*(CASE WHEN t1.Doccur = 'RMB' THEN t2.LineTotal+t2.vatsum ELSE t2.TotalFrgn+t2.VatSumFrgn end)  AS Total_ValueInTax
+    ,t1.DocRate AS Cur_Rate
+    ,CASE WHEN t1.doctype='I' THEN (CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*t2.LineTotal
+          ELSE CAST((CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*CAST(t2.LineTotal AS numeric(18,6)) AS nvarchar(50)) END AS TotalVAL_RMB
+    ,CASE WHEN t1.doctype='I' THEN (CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*(t2.LineTotal+t2.vatsum)
+          ELSE CAST((CASE WHEN t1.CANCELED='C' THEN -1 ELSE 1 END)*CAST(t2.LineTotal +t2.vatsum  AS numeric(18,6)) AS nvarchar(50)) END  AS Total_ValueInTax_RMB
+    ,t2.u_ves_baseNum PONumber
+    ,k1.Name AS 'Country'
+   -- ,t12.CountryS 
+    ,k2.name  AS 'CountryS'
+    ,n.DocDate AS 'Deliver date'
+    ,n.DocNum AS 'Delivery Number'
+	,rc.docdate 'Invoice Paid Date'
+	,t13.descript as Territory
+	,t1.ShipToCode
+	,t12.CountyS as ShipToName
+	,t2.AcctCode
+	,O.AcctName
+	,O.FrgnName
+	,s1.trnspname
+FROM OINV t1 WITH(NOLOCK)   INNER JOIN INV1 t2 WITH(NOLOCK) ON t1.DocEntry =t2.DocEntry 
+							 LEFT JOIN OCRD d  WITH(NOLOCK) ON t1.CardCode=d.CardCode
+							 LEFT JOIN OSLP e  WITH(NOLOCK) ON d.SlpCode=e.SlpCode
+							 LEFT JOIN OUSR T3 WITH(NOLOCK) ON T3.USERID = t1.UserSign
+							 LEFT JOIN OHEM a  WITH(NOLOCK) ON t1.OwnerCode=a.empID
+							 LEFT JOIN OUSR b  WITH(NOLOCK) ON b.USERID = a.userId
+							 LEFT JOIN crd1 k  WITH(NOLOCK) ON d.cardcode = k.cardcode AND k.AdresType = 'B' 
+							 LEFT JOIN OCRY k1 WITH(NOLOCK) ON K.Country = K1.Code
+							 LEFT JOIN DLN1 m  WITH(NOLOCK) ON t2.bASeEntry = m.docEntry AND t2.BASeLine = m.LineNum AND t2.BASEType = '15'
+							 LEFT JOIN ODLN n  WITH(NOLOCK) ON n.docEntry = m.docEntry
+							 left join ordr r0 on m.baseref = cast(r0.docnum as varchar(25)) and m.bASEType = 17
+							 LEFT JOIN OACT O  WITH(NOLOCK) ON t2.acctcode = O.acctcode
+							 LEFT JOIN ( SELECT CASE WHEN b.SrcObjTyp='13' THEN t2.DocNum WHEN b.SrcObjTyp='14' THEN t4.DocNum
+							                         WHEN b.SrcObjTyp='24' THEN t3.DocNum ELSE '10000000' END AS 'Docnum'
+							                         ,a.RecONType,a.CancelAbs,a.RecONNum,IsCard,RecONDate,RecONJEId,b.SrcObjAbs,b.SrcObjtyp
+                                         FROM oitr a WITH(NOLOCK) LEFT JOIN ITR1 b  WITH(NOLOCK) ON a.RecONNum=b.RecONNum
+																  LEFT JOIN OINV T2 WITH(NOLOCK) ON b.SrcObjAbs=T2.DocEntry AND b.SrcObjTyp='13'		
+																  LEFT JOIN ORCT T3 WITH(NOLOCK) ON b.SrcObjAbs=T3.DocEntry AND b.SrcObjTyp='24'		
+																  LEFT JOIN ORIN T4 WITH(NOLOCK) ON b.SrcObjAbs=T4.DocEntry AND b.SrcObjTyp='14'	
+																  LEFT JOIN OVPM t5 WITH(NOLOCK) ON b.SrcObjAbs=T5.DocEntry AND b.SrcObjTyp='46'	
+																  LEFT JOIN OJDT t6 WITH(NOLOCK) ON b.SrcObjAbs=T6.transid AND b.SrcObjTyp='30'		
+										WHERE IsCard='C' AND (b.ShortName not like 'S%' AND b.ShortName not like '%V')AND RecONType<>'4'
+                                        ) checknum ON checknum.Docnum = t1.DocNum
+                             left join INV12 t12 with (nolock) on t12.DocEntry = t1.DocEntry   
+                              LEFT JOIN OCRY k2 WITH(NOLOCK) ON t12.CountryS = K2.Code 
+							  left join oshp s1 on t1.trnspcode=s1.trnspcode
+							  left join oter t13 on d.Territory=t13.territryID
+							  left join OGTI gti on gti.MappingNum =cast(t1.Docnum as nvarchar(20))
+							  left join ojdt jt on t1.transid = jt.transid
+							  LEFT JOIN rct2 rc2 on rc2.docentry = t1.docentry
+								left join orct rc on rc.docentry = rc2.docnum
+WHERE (t1.DocDate >=@RunDate1 AND t1.DocDate <=@RunDate2 ) and (t1.cardcode=@CardCode or @CardCode='') AND t2.acctcode like '41%'
+ AND isnull(t2.WhsCode,'') NOT IN ('CC','CT')
+
+UNION ALL
+
+
+
+SELECT distinct  r0.docnum 'Sales Order Number',r0.docdate 'Date of Sales Order',  (CASE WHEN t1.doctotal<>0 THEN 'Credit' ELSE 'FOC' END)+(CASE WHEN t1.CANCELED<>'N' THEN ' t1.CANCELED' ELSE '' END) InvoiceType
+	,t1.U_VES_ReASONCode 'ReasonType',t1.numatcard,t2.U_manufsource
+	,CASE WHEN t2.TargetType='-1' AND LEFT(t1.ReceiptNum,2)='24' THEN 'Incomingpayment'	WHEN t2.bASEType='13' THEN 'Invoice'
+	      WHEN (t2.TargetType='-1' AND t1.DocNum IN (checknum.Docnum)) THEN 'InterRec' 	ELSE 'Open' END AS 'RecMethod'
+	,t2.OcrCode
+	,t2.U_finuse
+	,(SELECT groupname FROM ocrg WHERE groupcode=(SELECT groupcode FROM ocrd WHERE cardcode=t1.cardcode))
+	,t1.DocDate,t2.VisOrder,t1.DocNum,t1.docstatus,jt.Number 'JENumber',gti.GtsInvNum,t2.ItemCode,t2.DscriptiON
+	,t2.ocrcode,t2.ocrcode2,t2.ocrcode3,t2.ocrcode4,t2.ocrcode5
+	,d.Password as 'BPSiteCode',t1.CardCode,t1.CardName
+	,T1.U_DocType,T3.U_NAME,b.U_name AS 'Sales Owner',e.SlpName
+	,Replace(T1.Comments,CHAR(13) + CHAR(10), '<br>') AS 'Comments'
+	,t1.u_Ves_serialnum
+	,t2.unitMsr
+	,(CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)* t2.Quantity AS  Quantity
+	,(CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*t2.Weight1 AS 'Weight'
+	,t1.doccur,t2.VatPrcnt AS vat
+    ,(CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*t2.vatsum AS RMB_VAT
+    ,(CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*t2.VatSumFrgn AS Frgn_VAT
+    , CAST(CAST(t2.price*t1.docrate AS numeric(18,6)) AS nvarchar(50))  AS selprice
+    ,(CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*t2.price*t2.Quantity AS Value_Currency
+    ,(CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*(CASE WHEN t1.Doccur = 'RMB' THEN t2.LineTotal else t2.TotalFrgn end) AS seltotle
+    ,(CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*(CASE WHEN t1.Doccur = 'RMB' THEN t2.LineTotal+t2.vatsum ELSE t2.TotalFrgn+t2.VatSumFrgn end)  AS Total_ValueInTax
+    ,t1.DocRate AS Cur_Rate
+    ,CASE WHEN t1.doctype='I' THEN (CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*t2.LineTotal
+          ELSE CAST((CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*CAST(t2.LineTotal AS numeric(18,6)) AS nvarchar(50)) END AS TotalVAL_RMB
+    ,CASE WHEN t1.doctype='I' THEN (CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*(t2.LineTotal+t2.vatsum)
+          ELSE CAST((CASE WHEN t1.CANCELED='C' THEN 1 ELSE -1 END)*CAST(t2.LineTotal +t2.vatsum  AS numeric(18,6)) AS nvarchar(50)) END  AS Total_ValueInTax_RMB
+    ,t2.u_ves_baseNum PONumber
+	,k1.Name AS 'Country'
+	,k2.name  AS 'CountryS'
+	,Null AS 'Deliver date'
+	,Null AS 'Delivery Number'
+	,rc.docdate 'Invoice Paid Date'
+	,t13.descript as Territory
+	,t1.ShipToCode
+	,t12.CountyS as ShipToName
+	,t2.AcctCode
+	,O.AcctName
+	,O.FrgnName
+	,s1.trnspname
+FROM ORIN t1 WITH(NOLOCK)   INNER JOIN RIN1 t2 WITH(NOLOCK) ON t1.DocEntry =t2.DocEntry 
+                            left join inv1 inv on t2.bASeEntry = inv.docentry and t2.baseline = inv.linenum and t2.bASEType = inv.objtype
+							left join DLN1 d1 on inv.bASeEntry = d1.docentry and inv.baseline = d1.linenum and inv.bASEType = d1.objtype
+							left join ordr r0 on d1.baseref = cast(r0.docnum as varchar(25)) and d1.bASEType = 17
+							 LEFT JOIN OCRD d  WITH(NOLOCK) ON t1.CardCode=d.CardCode
+							 LEFT JOIN OSLP e  WITH(NOLOCK) ON d.SlpCode=e.SlpCode
+							 LEFT JOIN OUSR T3 WITH(NOLOCK)  ON T3.USERID = t1.UserSign
+							 LEFT JOIN OHEM a  WITH(NOLOCK) ON t1.OwnerCode=a.empID
+							 LEFT JOIN OUSR b  WITH(NOLOCK) ON b.USERID = a.userId
+							 LEFT JOIN crd1 k  WITH(NOLOCK) ON d.cardcode = k.cardcode AND k.AdresType = 'B' 
+							 LEFT JOIN OCRY k1 WITH(NOLOCK) ON K.Country = K1.Code
+							 LEFT JOIN OACT O  WITH(NOLOCK) ON t2.acctcode = O.acctcode
+							 LEFT JOIN ( SELECT CASE WHEN b.SrcObjTyp='13' THEN t2.DocNum WHEN b.SrcObjTyp='14' THEN t4.DocNum
+							                         WHEN b.SrcObjTyp='24' THEN t3.DocNum  ELSE '10000000' END AS 'Docnum'
+							                   ,a.RecONType,a.CancelAbs,a.RecONNum,IsCard,RecONDate,RecONJEId,b.SrcObjAbs,b.SrcObjtyp
+						                 FROM oitr a WITH(NOLOCK) LEFT JOIN ITR1 b  WITH(NOLOCK) ON a.RecONNum=b.RecONNum
+																  LEFT JOIN OINV T2 WITH(NOLOCK) ON b.SrcObjAbs=T2.DocEntry AND b.SrcObjTyp='13'		
+																  LEFT JOIN ORCT T3 WITH(NOLOCK) ON b.SrcObjAbs=T3.DocEntry AND b.SrcObjTyp='24'		
+																  LEFT JOIN ORIN T4 WITH(NOLOCK) ON b.SrcObjAbs=T4.DocEntry AND b.SrcObjTyp='14'	
+																  LEFT JOIN OVPM t5 WITH(NOLOCK) ON b.SrcObjAbs=T5.DocEntry AND b.SrcObjTyp='46'	
+																  LEFT JOIN OJDT t6 WITH(NOLOCK) ON b.SrcObjAbs=T6.transid AND b.SrcObjTyp='30'		
+										 WHERE IsCard='C' AND (b.ShortName not like 'S%' AND b.ShortName not like '%V') AND RecONType<>'4'
+										) checknum ON checknum.Docnum = t1.DocNum
+							left join RIN12 t12 with (nolock) on t12.DocEntry = t1.DocEntry   
+							  LEFT JOIN OCRY k2 WITH(NOLOCK) ON t12.CountryS = K2.Code 
+							   left join oshp s1 on t1.trnspcode=s1.trnspcode
+							   left join oter t13 on d.Territory=t13.territryID
+							   left join OGTI gti on gti.MappingNum =cast(t1.Docnum as nvarchar(20))
+							   left join ojdt jt on t1.transid = jt.transid
+							   LEFT JOIN rct2 rc2 on rc2.docentry = t1.docentry
+								left join orct rc on rc.docentry = rc2.docnum
+WHERE (t1.DocDate >=@RunDate1 AND t1.DocDate <=@RunDate2 ) and (t1.cardcode=@CardCode or @CardCode='') AND t2.acctcode like '41%'
+union all
+select  NULL,NULL,
+case TransType when 30 then '30-JE' else 'Others' end,NULL,NULL,NULL,NULL,ProfitCode,NULL,NULL,RefDate,Line_ID,BaseRef,NULL,t1.transid,NULL,NULL,NULL,ProfitCode,OcrCode2
+,OcrCode3,OcrCode4,OcrCode5,NULL,NULL,Ref3Line,NULL,NULL,
+NULL,NULL,LineMemo,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,credit-Debit,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,Account,AcctName,FrgnName,NULL
+from jdt1 t1 WITH(NOLOCK)  LEFT JOIN OACT O  WITH(NOLOCK) ON Account = O.acctcode
+where (t1.RefDate >=@RunDate1 AND t1.RefDate <=@RunDate2 ) and (t1.Ref3Line=@CardCode or @CardCode='') and Account like '41%' and TransType  not in (13,14,-3)
