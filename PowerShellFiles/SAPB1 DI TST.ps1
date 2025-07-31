@@ -22,13 +22,13 @@ Add-Type -Path 'C:\Program Files (x86)\SAP\SAP Business One DI API\DI API 90\SAP
 $cmp  = new-object -ComObject "sapbobscom.company"
 
 $cmp.Server = "SZ-SAPSTG91"
-$cmp.SLDServer ="SZ-TSTSAPLIC92:40000"
+$cmp.SLDServer ="S"
 $cmp.CompanyDB = "SAPB1_CS_TST"
 $cmp.DbServerType =8
 $cmp.DbUserName ="butterfly"
-$cmp.DbPassword="buTterF1y"
+$cmp.DbPassword=""
 $cmp.UserName="montova"
-$cmp.Password="ButterCS"
+$cmp.Password=""
 $cmp.UseTrusted = 0 
 $cmp.Connect()
 $cmp.GetLastErrorDescription()
