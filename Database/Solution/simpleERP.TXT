@@ -1,1 +1,14 @@
 
+Design a simple ERP for income, out ,store 
+1. database design
+     1.tables
+    2.sp
+     3.fn
+      4.views
+      5.users
+       6.roles
+       7.permission
+ 2. UI Design
+
+
+ 3. coding (c#)
