@@ -1,0 +1,13 @@
+SAPbobsCOM.Payments oIPD = (SAPbobsCOM.Payments)oCompany.GetBusinessObject(SAPbobsCOM.BoObjectTypes.oPaymentsDrafts);
+oIPD.DocType = SAPbobsCOM.BoRcptTypes.rSupplier;
+oIPD.CardCode = "V10000";
+oIPD.DocDate = DateTime.Today;
+oIPD.TransferAccount = "161000";
+oIPD.TransferSum = 23;
+oIPD.TransferDate = DateTime.Today;
+oIPD.TransferReference = "T123456";
+oIPD.DocObjectCode = SAPbobsCOM.BoPaymentsObjectType.bopot_OutgoingPayments;
+oIPD.Invoices.InvoiceType = SAPbobsCOM.BoRcptInvTypes.it_PurchaseInvoice;
+oIPD.Invoices.DocEntry = 706;
+oIPD.Invoices.SumApplied = 23;
+int ADPDF = oIPD.Add();

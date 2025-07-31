@@ -1,0 +1,23 @@
+{
+ "AIServer":"dg-ai-global-01",
+ "AIDB":"BusinessIntegration",
+ "AIConnectionstring":"SELECT t.UserName,t.UserPassword,t.DatabaseName,t.DBUserName,t.DBPassword,t.ServerName,t.LicenceServer FROM SiteConnection t WHERE t.SiteCode IN ('AS','kt','BY','cs','sz','wn','YK')  AND isnull(t.AppName,'') =''",
+ "DBServer":"SZ-SAPSTG92",
+"SLDServer":"SZ-TSTSAPLIC92:40000",
+"CompanyDB":"SAPB1_CS_TST",
+"DbServerType":"8",
+"DbUserName":"b1if",
+"DbPassword":"Vsvapp@202333",
+"UserName":"zhaojac",
+"Password":"Ves-123456",
+"sql_autoGRN" : ["SELECT distinct p.cardcode,p.docnum,p1.DocEntry,p1.linenum,p1.opencreqty quantity,CAST(p10.LineText AS NVARCHAR(256)) SpecialLineText FROM OPOR p INNER JOIN POR1 p1 ON p.DocEntry = p1.DocEntry",
+  "INNER JOIN [sapb1_YK].dbo.[@ves_autogrn] ag ON p1.ItemCode = ag.u_itemcode   AND p1.U_Ves_Requisitioner = ag.u_requestor",
+  "and p.CardName = ag.U_suppliername   LEFT JOIN POR10 p10 ON p10.DocEntry = p1.DocEntry  AND p10.ObjType = p1.ObjType AND p10.AftLineNum = p1.LineNum",
+  "AND p10.LineType = 'T' inner join oadm a on   a.manager = ag.u_site ",
+  "WHERE p1.LineStatus = 'o' AND p.Printed = 'Y'  and p.DocDate>='20240407'"],
+"sql_autoAP" :"select * from dbo.VES_GRNS where isnull(Status,'')<>'C'",
+"sql_autoSCT" : ["Select distinct h.DocEntry, U_Ves_DocType",
+"FROM [@VES_CONSGNHDR] h inner join [@VES_CONSGNDTL] l on h.DocEntry = l.DocEntry WHERE U_Ves_DocType in ('CT','RE') AND cast(U_VES_Status as varchar(10)) IN ('Open') ",
+"and ISNULL(l.U_VES_Link_TargtEntry,'') = '' and h.U_VES_Date > '20221101'"],
+"sql_autoAPCreditMemo":"SELECT distinct T.DocEntry,T.DocNum,T.DocDate,T.CARDCODE FROM ODPO t INNER JOIN NNM1 n1 ON t.Series = n1.Series WHERE LEFT(n1.SeriesName,3) = 'PDI' AND t.DocStatus = 'O'"
+}
